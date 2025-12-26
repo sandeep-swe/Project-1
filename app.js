@@ -24,13 +24,22 @@ const upload = multer();
 
 // --- DATABASE CONNECTION ---
 const dburl = process.env.ATLASDB_URL;
+const DISABLE_DB = process.env.DISABLE_DB === 'true';
 async function main() {
-    await mongoose.connect(dburl);
+    if (DISABLE_DB) {
+        console.log('DISABLE_DB is true — skipping MongoDB connection (dev mode)');
+        return;
+    }
+    if (!dburl) {
+        throw new Error('ATLASDB_URL is not set in environment and DISABLE_DB is not enabled');
+    }
+    await mongoose.connect(dburl, { useNewUrlParser: true, useUnifiedTopology: true });
 }
 main().then(() => {
-    console.log("connected to db");
+    if (!DISABLE_DB) console.log('connected to db');
 }).catch((err) => {
-    console.log(err);
+    console.error('Could not connect to MongoDB:', err.message || err);
+    console.error('Application will continue in degraded mode (no DB). To disable this behavior set DISABLE_DB=true');
 });
 
 // --- EXPRESS SETUP & MIDDLEWARE ---
@@ -42,28 +51,36 @@ app.engine('ejs', ejsMate);
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- SESSION & FLASH SETUP ---
-const store = MongoStore.create({
-    mongoUrl: dburl,
-    crypto: {
-        secret: process.env.SECRET || "mysupersecret" // Use environment variable for secret
-    },
-    touchAfter: 24 * 3600,
-});
-
-store.on("error", () => {
-    console.log("Error in mongo session");
-});
-const sessionOptions = {
-    store, // Use MongoStore
-    secret: process.env.SECRET || "mysuppersecret",
-    resave: false,
-    saveUninitialized: true,
-    cookie: {
-        expire: Date.now() + 1000 * 60 * 60 * 24 * 7,
-        maxAge: 1000 * 60 * 60 * 24 * 7,
-        httpOnly: true
-    },
-};
+let sessionOptions;
+try {
+    if (!DISABLE_DB && dburl) {
+        const store = MongoStore.create({
+            mongoUrl: dburl,
+            crypto: { secret: process.env.SECRET || 'mysupersecret' },
+            touchAfter: 24 * 3600,
+        });
+        store.on('error', (e) => console.error('MongoStore error', e));
+        sessionOptions = {
+            store,
+            secret: process.env.SECRET || 'mysuppersecret',
+            resave: false,
+            saveUninitialized: true,
+            cookie: { expire: Date.now() + 1000 * 60 * 60 * 24 * 7, maxAge: 1000 * 60 * 60 * 24 * 7, httpOnly: true },
+        };
+    } else {
+        // Fallback to in-memory session store for development if DB disabled/unavailable
+        console.warn('Using in-memory session store (not for production).');
+        sessionOptions = {
+            secret: process.env.SECRET || 'mysuppersecret',
+            resave: false,
+            saveUninitialized: true,
+            cookie: { expire: Date.now() + 1000 * 60 * 60 * 24 * 7, maxAge: 1000 * 60 * 60 * 24 * 7, httpOnly: true },
+        };
+    }
+} catch (e) {
+    console.error('Error configuring session store:', e);
+    sessionOptions = { secret: process.env.SECRET || 'mysuppersecret', resave: false, saveUninitialized: true };
+}
 app.use(session(sessionOptions));
 app.use(flash());
 
