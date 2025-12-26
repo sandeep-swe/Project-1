@@ -163,6 +163,29 @@ app.get('/listings/udaipur', wrapAsync(async (req, res) => {
     res.render('listings/udaipur.ejs', { listings });
 }));
 
+// Search route - query param 'q' (location, title, description)
+app.get('/search', wrapAsync(async (req, res) => {
+    const q = (req.query.q || '').trim();
+    if (!q) {
+        return res.redirect('/listings');
+    }
+
+    // Escape regex special chars in user input
+    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(escapeRegex(q), 'i');
+
+    // Search location, title, or description
+    const listings = await Listing.find({
+        $or: [
+            { location: regex },
+            { title: regex },
+            { description: regex }
+        ]
+    });
+
+    console.log(`Search for "${q}" returned ${listings.length} listings`);
+    res.render('listings/search.ejs', { listings, query: q });
+}));
 
 //New and create route
 app.get('/listings/new',(req,res)=>{
